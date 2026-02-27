@@ -1,7 +1,3 @@
-<p align="center">
-  <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</p>
-
 # 🔑 ChatGPT API Key Validator
 
 **快速验证 OpenAI / ChatGPT API Key 的工具，支持检查可用模型并导出验证结果。**
