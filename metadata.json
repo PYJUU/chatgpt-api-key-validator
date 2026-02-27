@@ -1,0 +1,5 @@
+{
+  "name": "ChatGPT API Key Validator",
+  "description": "A tool to quickly validate OpenAI API keys, check available models, and export the results.",
+  "requestFramePermissions": []
+}
