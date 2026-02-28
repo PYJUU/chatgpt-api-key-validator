@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Play, Download, CheckCircle, XCircle, Loader2, Key, AlertCircle, Upload, FileText, Pause, Square, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
+import localforage from 'localforage';
 
 const AutoSizer = ({ children }: { children: (props: { width: number, height: number }) => React.ReactNode }) => {
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -72,8 +73,10 @@ export default function App() {
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<'idle' | 'running' | 'paused'>('idle');
   const [concurrencyLimit, setConcurrencyLimit] = useState(1);
+  const [apiEndpoint, setApiEndpoint] = useState('https://api.openai.com/v1');
   const [isDragging, setIsDragging] = useState(false);
   const [isReadingFile, setIsReadingFile] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [renderTrigger, setRenderTrigger] = useState(0);
   
   const resultsRef = useRef<KeyResult[]>([]);
@@ -90,48 +93,54 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const savedInput = localStorage.getItem('chatgpt_validator_input');
-    const savedConcurrency = localStorage.getItem('chatgpt_validator_concurrency');
-    if (savedInput) setInput(savedInput);
-    if (savedConcurrency) setConcurrencyLimit(parseInt(savedConcurrency, 10) || 1);
-    
-    const savedResults = localStorage.getItem('chatgpt_validator_results');
-    if (savedResults) {
+    const loadData = async () => {
       try {
-        const parsed = JSON.parse(savedResults);
-        resultsRef.current = parsed.map((r: KeyResult) => 
-          r.status === 'validating' ? { ...r, status: 'pending' } : r
-        );
-        triggerRender(true);
-      } catch (e) {}
-    }
+        const savedInput = await localforage.getItem<string>('chatgpt_validator_input');
+        if (savedInput) setInput(savedInput);
+        
+        const savedResults = await localforage.getItem<KeyResult[]>('chatgpt_validator_results');
+        if (savedResults) {
+          resultsRef.current = savedResults.map((r: KeyResult) => 
+            r.status === 'validating' ? { ...r, status: 'pending' } : r
+          );
+          triggerRender(true);
+        }
+      } catch (e) {
+        console.error('Failed to load data from localforage', e);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    
+    loadData();
+
+    const savedConcurrency = localStorage.getItem('chatgpt_validator_concurrency');
+    const savedEndpoint = localStorage.getItem('chatgpt_validator_endpoint');
+    if (savedConcurrency) setConcurrencyLimit(parseInt(savedConcurrency, 10) || 1);
+    if (savedEndpoint) setApiEndpoint(savedEndpoint);
   }, [triggerRender]);
 
   useEffect(() => {
-    // Only save input if it's not massively huge to prevent quota errors
-    if (input.length < 1000000) {
-      try {
-        localStorage.setItem('chatgpt_validator_input', input);
-      } catch (e) {
-        console.warn('Local storage quota exceeded for input');
-      }
-    }
-  }, [input]);
+    if (!isLoaded) return;
+    localforage.setItem('chatgpt_validator_input', input).catch(e => {
+      console.warn('Failed to save input to localforage', e);
+    });
+  }, [input, isLoaded]);
 
   useEffect(() => {
-    // Only save results if not massively huge
-    if (resultsRef.current.length < 50000) {
-      try {
-        localStorage.setItem('chatgpt_validator_results', JSON.stringify(resultsRef.current));
-      } catch (e) {
-        console.warn('Local storage quota exceeded for results');
-      }
-    }
-  }, [renderTrigger]);
+    if (!isLoaded) return;
+    localforage.setItem('chatgpt_validator_results', resultsRef.current).catch(e => {
+      console.warn('Failed to save results to localforage', e);
+    });
+  }, [renderTrigger, isLoaded]);
 
   useEffect(() => {
     localStorage.setItem('chatgpt_validator_concurrency', concurrencyLimit.toString());
   }, [concurrencyLimit]);
+
+  useEffect(() => {
+    localStorage.setItem('chatgpt_validator_endpoint', apiEndpoint);
+  }, [apiEndpoint]);
 
   const updateStatus = (newStatus: 'idle' | 'running' | 'paused' | 'stopped') => {
     statusRef.current = newStatus;
@@ -310,21 +319,28 @@ export default function App() {
         const i = queue.shift();
         if (i === undefined) break;
 
+        if (!resultsRef.current[i]) break;
+
         resultsRef.current[i].status = 'validating';
         triggerRender();
         
         try {
-          const response = await fetch('https://api.openai.com/v1/models', {
+          const baseUrl = apiEndpoint.endsWith('/') ? apiEndpoint.slice(0, -1) : apiEndpoint;
+          const response = await fetch(`${baseUrl}/models`, {
             headers: {
               'Authorization': `Bearer ${uniqueKeys[i]}`
             }
           });
           
           if (statusRef.current === 'stopped') {
-             resultsRef.current[i].status = 'pending';
+             if (resultsRef.current[i]) {
+               resultsRef.current[i].status = 'pending';
+             }
              triggerRender();
              break;
           }
+
+          if (!resultsRef.current[i]) break;
 
           if (response.ok) {
             const data = await response.json();
@@ -341,22 +357,81 @@ export default function App() {
               );
             models.sort();
             
-            resultsRef.current[i].status = 'valid';
-            resultsRef.current[i].models = models;
+            let hasQuota = true;
+            let quotaErrorMsg = '';
+            
+            try {
+              const testModel = models.includes('gpt-4o-mini') ? 'gpt-4o-mini' : 
+                                (models.includes('gpt-3.5-turbo') ? 'gpt-3.5-turbo' : 
+                                (models.find((m: string) => m.startsWith('gpt-')) || 'gpt-3.5-turbo'));
+              
+              const baseUrl = apiEndpoint.endsWith('/') ? apiEndpoint.slice(0, -1) : apiEndpoint;
+              const chatResponse = await fetch(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${uniqueKeys[i]}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  model: testModel,
+                  messages: [{ role: 'user', content: 'hi' }],
+                  max_tokens: 1
+                })
+              });
+              
+              if (!resultsRef.current[i]) break;
+
+              if (!chatResponse.ok) {
+                const errData = await chatResponse.json();
+                if (!resultsRef.current[i]) break;
+                const errCode = errData?.error?.code;
+                const errType = errData?.error?.type;
+                const errMsg = errData?.error?.message || '';
+                
+                if (errCode === 'insufficient_quota' || errType === 'insufficient_quota' || errMsg.includes('insufficient_quota')) {
+                  hasQuota = false;
+                  quotaErrorMsg = '余额不足 (insufficient_quota)';
+                } else if (errCode === 'billing_not_active' || errType === 'billing_not_active' || errMsg.includes('billing_not_active')) {
+                  hasQuota = false;
+                  quotaErrorMsg = '账单未激活 (billing_not_active)';
+                } else if (errCode === 'account_deactivated' || errType === 'account_deactivated' || errMsg.includes('account_deactivated')) {
+                  hasQuota = false;
+                  quotaErrorMsg = '账号已封禁 (account_deactivated)';
+                }
+              }
+            } catch (e) {
+              // Ignore network errors on the second request, assume valid if models succeeded
+            }
+            
+            if (!resultsRef.current[i]) break;
+
+            if (hasQuota) {
+              resultsRef.current[i].status = 'valid';
+              resultsRef.current[i].models = models;
+            } else {
+              resultsRef.current[i].status = 'invalid';
+              resultsRef.current[i].errorMsg = quotaErrorMsg;
+            }
           } else {
             let errorMsg = `HTTP ${response.status}`;
             try {
               const errData = await response.json();
+              if (!resultsRef.current[i]) break;
               if (errData.error && errData.error.message) {
                 errorMsg = errData.error.message;
               }
             } catch (e) {}
+            
+            if (!resultsRef.current[i]) break;
+            
             resultsRef.current[i].status = 'invalid';
             resultsRef.current[i].errorMsg = errorMsg;
           }
         } catch (error: any) {
-          resultsRef.current[i].status = 'error';
-          resultsRef.current[i].errorMsg = error.message;
+          if (resultsRef.current[i]) {
+            resultsRef.current[i].status = 'error';
+            resultsRef.current[i].errorMsg = error.message;
+          }
         }
         
         triggerRender();
@@ -398,8 +473,8 @@ export default function App() {
     setInput('');
     resultsRef.current = [];
     triggerRender(true);
-    localStorage.removeItem('chatgpt_validator_input');
-    localStorage.removeItem('chatgpt_validator_results');
+    localforage.removeItem('chatgpt_validator_input');
+    localforage.removeItem('chatgpt_validator_results');
   };
 
   const downloadValidKeys = () => {
@@ -475,6 +550,17 @@ export default function App() {
   };
 
   const validCount = resultsRef.current.filter(r => r.status === 'valid').length;
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center text-indigo-600">
+          <Loader2 size={32} className="mb-4 animate-spin" />
+          <span className="font-medium">正在加载数据...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 font-sans text-slate-900">
@@ -557,20 +643,36 @@ export default function App() {
                 )}
               </div>
               
-              <div className="flex items-center space-x-3 mt-4">
-                <label className="text-sm font-medium text-slate-700 whitespace-nowrap">
-                  并发数:
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="50"
-                  value={concurrencyLimit}
-                  onChange={(e) => setConcurrencyLimit(parseInt(e.target.value) || 1)}
-                  disabled={status !== 'idle'}
-                  className="w-20 px-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
-                />
-                <span className="text-xs text-slate-500">推荐5并发</span>
+              <div className="flex flex-col space-y-4 mt-4">
+                <div className="flex items-center space-x-3">
+                  <label className="text-sm font-medium text-slate-700 whitespace-nowrap">
+                    接口地址:
+                  </label>
+                  <input
+                    type="text"
+                    value={apiEndpoint}
+                    onChange={(e) => setApiEndpoint(e.target.value)}
+                    disabled={status !== 'idle'}
+                    placeholder="https://api.openai.com/v1"
+                    className="flex-1 px-3 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
+                  />
+                </div>
+                
+                <div className="flex items-center space-x-3">
+                  <label className="text-sm font-medium text-slate-700 whitespace-nowrap">
+                    并发数:
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={concurrencyLimit}
+                    onChange={(e) => setConcurrencyLimit(parseInt(e.target.value) || 1)}
+                    disabled={status !== 'idle'}
+                    className="w-20 px-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
+                  />
+                  <span className="text-xs text-slate-500">推荐5并发</span>
+                </div>
               </div>
               
               {status === 'idle' ? (
