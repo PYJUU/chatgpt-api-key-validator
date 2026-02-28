@@ -1,7 +1,3 @@
-<p align="center">
-  <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</p>
-
 # 🔑 ChatGPT API Key Validator
 
 **快速验证 OpenAI / ChatGPT API Key 的工具，支持检查可用模型并导出验证结果。**
@@ -10,7 +6,7 @@
 ![React](https://img.shields.io/badge/React-19-blue)
 ![Vite](https://img.shields.io/badge/Vite-6-purple)
 ![TailwindCSS](https://img.shields.io/badge/TailwindCSS-4-38bdf8)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+![License](https://img.shields.io/github/license/PYJUU/chatgpt-api-key-validator)
 
 ---
 
@@ -37,17 +33,25 @@
 - Node.js >= 20.0.0  
 - npm >= 8.0.0
 
-### 克隆仓库
+### 快速安装
+- 克隆仓库
 
 ```bash
 git clone https://github.com/PYJUU/chatgpt-api-key-validator.git
 cd chatgpt-api-key-validator.git
-安装依赖
-npm install
-配置环境变量
+```
 
-启动开发服务器
+- 安装依赖
+
+```sh
+npm install
+```
+
+- 启动开发服务器
+
+```sh
 npm run dev
+```
 
 打开浏览器访问： http://localhost:3000
                 http://127.0.0.1:3000
@@ -57,15 +61,17 @@ npm run dev
 
 导出文件会保存在浏览器默认下载目录。
 
-🧩 项目结构（简要）
+### 🧩 项目结构（简要）
+
 /src             # 源代码（React + Vite）
 /public          # 静态资源
 /.env.example    # gemini ai修改后的副产品，想删就删不影响使用
 /package.json
-📝 贡献 & 许可证
 
-欢迎提交 请遵循项目的代码风格与提交规范。
-本项目采用 GPLv3 许可证，详见 LICENSE 文件。
+### 📝 贡献 & 许可证
+
+- 欢迎提交 请遵循项目的代码风格与提交规范。
+- 本项目采用 GPLv3 许可证，详见 LICENSE 文件。
 
 
 如需帮助或定制功能，可在仓库 Issues 中联系或使用 Pull Request。
